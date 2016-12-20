@@ -62,6 +62,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import static java.util.logging.Level.*;
+import javax.annotation.CheckForNull;
 import static org.jenkinsci.plugins.workflow.cps.CpsFlowExecution.*;
 import static org.jenkinsci.plugins.workflow.cps.persistence.PersistenceContext.*;
 
@@ -122,7 +123,7 @@ public final class CpsThreadGroup implements Serializable {
      */
     public final Map<Integer,Closure> closures = new HashMap<Integer,Closure>();
 
-    private final List<Script> scripts = new ArrayList<>();
+    private final @CheckForNull List<Script> scripts = new ArrayList<>();
 
     CpsThreadGroup(CpsFlowExecution execution) {
         this.execution = execution;
@@ -135,7 +136,9 @@ public final class CpsThreadGroup implements Serializable {
 
     /** Track a script so that we can fix up its {@link Script#getBinding}s after deserialization. */
     void register(Script script) {
-        scripts.add(script);
+        if (scripts != null) {
+            scripts.add(script);
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -313,7 +316,7 @@ public final class CpsThreadGroup implements Serializable {
      *      is akin to a Unix thread waiting for I/O completion.
      */
     @CpsVmThreadOnly("root")
-    private boolean run() throws IOException {
+    private boolean run() {
         boolean changed = false;
         boolean ending = false;
         boolean stillRunnable = false;
@@ -353,11 +356,18 @@ public final class CpsThreadGroup implements Serializable {
         }
 
         if (changed) {
-            saveProgram();
+            try {
+                saveProgram();
+            } catch (IOException x) {
+                LOGGER.log(WARNING, "program state save failed", x);
+            }
         }
         if (ending) {
             execution.cleanUpHeap();
-            scripts.clear();
+            if (scripts != null) {
+                scripts.clear();
+            }
+            closures.clear();
         }
 
         return stillRunnable;
@@ -433,11 +443,9 @@ public final class CpsThreadGroup implements Serializable {
             Files.move(tmpFile.toPath(), f.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             LOGGER.log(FINE, "program state saved");
         } catch (RuntimeException e) {
-            LOGGER.log(WARNING, "program state save failed",e);
             propagateErrorToWorkflow(e);
             throw new IOException("Failed to persist "+f,e);
         } catch (IOException e) {
-            LOGGER.log(WARNING, "program state save failed",e);
             propagateErrorToWorkflow(e);
             throw new IOException("Failed to persist "+f,e);
         } finally {
